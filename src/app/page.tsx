@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useTransition } from 'react';
+import React, { useState, useEffect, useTransition, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Product, ProductionLogMaterial } from '@/lib/types';
 import { calculateMaterials, formatNum } from '@/lib/calculator';
@@ -19,6 +19,7 @@ import {
   Sparkles,
   Eye,
   Loader2,
+  Scale,
 } from 'lucide-react';
 
 export default function ProductionLogPage() {
@@ -32,6 +33,9 @@ export default function ProductionLogPage() {
   const [quantity, setQuantity] = useState<number | string>('');
   const [notes, setNotes] = useState<string>('');
 
+  // 원료수불부 산출 단위 선택 (g 또는 kg, 기본값 g)
+  const [materialUnit, setMaterialUnit] = useState<'g' | 'kg'>('g');
+
   // 계산된 원재료 목록
   const [materials, setMaterials] = useState<ProductionLogMaterial[]>([]);
 
@@ -42,7 +46,7 @@ export default function ProductionLogPage() {
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
 
-  // 1. 제품 및 배합비 데이터 로드
+  // 1. 제품 및 배합비 데이터 로드 (제품군 포함)
   const fetchProducts = async () => {
     try {
       setIsLoading(true);
@@ -54,6 +58,12 @@ export default function ProductionLogPage() {
           name,
           capacity,
           unit,
+          category_id,
+          product_categories (
+            id,
+            name,
+            sort_order
+          ),
           product_ingredients (
             id,
             ingredient_name,
@@ -72,11 +82,13 @@ export default function ProductionLogPage() {
         name: p.name,
         capacity: Number(p.capacity),
         unit: p.unit,
+        category_id: p.category_id,
+        category_name: p.product_categories?.name || '기타',
         ingredients: (p.product_ingredients || []).map((ing: any) => ({
           id: ing.id,
           ingredient_name: ing.ingredient_name,
           ratio: Number(ing.ratio),
-          unit: ing.unit,
+          unit: ing.unit || 'g',
           remarks: ing.remarks || '',
           sort_order: ing.sort_order || 0,
         })),
@@ -101,7 +113,18 @@ export default function ProductionLogPage() {
     fetchProducts();
   }, []);
 
-  // 2. 제품 선택 변경 시
+  // 2. 제품군별 그룹화
+  const groupedProducts = useMemo(() => {
+    const groups: { [key: string]: Product[] } = {};
+    products.forEach((prod) => {
+      const cat = prod.category_name || '기타';
+      if (!groups[cat]) groups[cat] = [];
+      groups[cat].push(prod);
+    });
+    return groups;
+  }, [products]);
+
+  // 3. 제품 선택 변경 시
   const handleProductChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const prodId = e.target.value;
     setSelectedProductId(prodId);
@@ -109,17 +132,17 @@ export default function ProductionLogPage() {
     setSelectedProduct(prod);
   };
 
-  // 3. 생산량 또는 제품 변경 시 원료수불 자동 계산
+  // 4. 생산량 또는 제품 또는 단위 변경 시 원료수불 자동 계산
   useEffect(() => {
     if (!selectedProduct || !quantity || Number(quantity) <= 0) {
       setMaterials([]);
       return;
     }
-    const calculated = calculateMaterials(selectedProduct, Number(quantity));
+    const calculated = calculateMaterials(selectedProduct, Number(quantity), materialUnit);
     setMaterials(calculated);
-  }, [selectedProduct, quantity]);
+  }, [selectedProduct, quantity, materialUnit]);
 
-  // 4. 생산일지 저장
+  // 5. 생산일지 저장
   const handleSave = async () => {
     if (!selectedProduct) {
       alert('제품을 선택해주세요.');
@@ -152,7 +175,7 @@ export default function ProductionLogPage() {
 
       if (logErr) throw logErr;
 
-      // 2) 원료수불 상세 내역 저장
+      // 2) 원료수불 상세 내역 저장 (선택된 단위로 저장)
       if (materials.length > 0 && logData) {
         const matPayload = materials.map((m) => ({
           log_id: logData.id,
@@ -180,12 +203,12 @@ export default function ProductionLogPage() {
     }
   };
 
-  // 5. PDF 인쇄 호출
+  // 6. PDF 인쇄 호출
   const handlePrint = () => {
     window.print();
   };
 
-  // 6. HWPX 다운로드 호출
+  // 7. HWPX 다운로드 호출
   const handleDownloadHWPX = async () => {
     if (!selectedProduct) {
       alert('제품을 먼저 선택해주세요.');
@@ -201,12 +224,13 @@ export default function ProductionLogPage() {
     });
   };
 
-  // 7. 초기화
+  // 8. 초기화
   const handleReset = () => {
     if (confirm('입력한 내용을 초기화하시겠습니까?')) {
       setQuantity('');
       setNotes('');
       setLogDate(todayStr);
+      setMaterialUnit('g');
       if (products.length > 0) {
         setSelectedProductId(products[0].id);
         setSelectedProduct(products[0]);
@@ -216,7 +240,7 @@ export default function ProductionLogPage() {
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
-      {/* 인쇄 전용 영역 (화면에서는 숨겨지고 @media print 시 출력) */}
+      {/* 인쇄 전용 영역 */}
       <div id="printable-root" className="hidden print:block">
         <ProductionSheetDocument
           logDate={logDate}
@@ -293,11 +317,14 @@ export default function ProductionLogPage() {
                     </div>
                   </div>
 
-                  {/* 제품 선택 */}
+                  {/* 제품 선택 (제품군별 그룹화) */}
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
-                      생산 제품 선택
-                    </label>
+                    <div className="flex items-center justify-between mb-1.5">
+                      <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+                        생산 제품 선택
+                      </label>
+                      <span className="text-[11px] text-slate-400 font-medium">제품군별 정렬됨</span>
+                    </div>
                     {products.length === 0 ? (
                       <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-800">
                         등록된 제품이 없습니다. 상단 '제품 및 원재료 관리'에서 먼저 제품을 등록해주세요.
@@ -309,10 +336,14 @@ export default function ProductionLogPage() {
                           onChange={handleProductChange}
                           className="w-full pl-3.5 pr-10 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-semibold text-slate-800 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all appearance-none cursor-pointer"
                         >
-                          {products.map((prod) => (
-                            <option key={prod.id} value={prod.id}>
-                              {prod.name} ({prod.capacity}{prod.unit})
-                            </option>
+                          {Object.entries(groupedProducts).map(([catName, prodList]) => (
+                            <optgroup key={catName} label={`📁 ${catName}`}>
+                              {prodList.map((prod) => (
+                                <option key={prod.id} value={prod.id}>
+                                  {prod.name} ({prod.capacity}{prod.unit})
+                                </option>
+                              ))}
+                            </optgroup>
                           ))}
                         </select>
                         <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-slate-500">
@@ -326,6 +357,9 @@ export default function ProductionLogPage() {
                     {/* 선택된 제품 상세 정보 뱃지 */}
                     {selectedProduct && (
                       <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                        <span className="px-2.5 py-1 rounded-md bg-blue-50 text-blue-700 font-semibold border border-blue-200/60">
+                          분류: {selectedProduct.category_name}
+                        </span>
                         <span className="px-2.5 py-1 rounded-md bg-slate-100 text-slate-700 font-medium">
                           규격: 1개당 {selectedProduct.capacity} {selectedProduct.unit}
                         </span>
@@ -336,7 +370,7 @@ export default function ProductionLogPage() {
                     )}
                   </div>
 
-                  {/* 생산량 입력 */}
+                  {/* 생산 수량 입력 */}
                   <div>
                     <div className="flex items-center justify-between mb-1.5">
                       <label className="text-xs font-bold text-slate-700 uppercase tracking-wider">
@@ -355,7 +389,7 @@ export default function ProductionLogPage() {
                         className="w-full px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-base font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent transition-all"
                       />
                       <span className="absolute right-3.5 top-2.5 text-sm font-semibold text-slate-400">
-                        {selectedProduct?.unit ? '개' : '개'}
+                        개
                       </span>
                     </div>
 
@@ -377,6 +411,43 @@ export default function ProductionLogPage() {
                     </div>
                   </div>
 
+                  {/* 원료수불부 산출 단위 토글 (g / kg) */}
+                  <div className="p-3 bg-slate-50 rounded-xl border border-slate-200">
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
+                        <Scale className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>원료수불부 산출 단위</span>
+                      </label>
+                      <span className="text-[11px] text-slate-500">
+                        문서에 표기될 단위 선택
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 bg-slate-200/80 p-1 rounded-xl">
+                      <button
+                        type="button"
+                        onClick={() => setMaterialUnit('g')}
+                        className={`py-1.5 text-xs font-bold rounded-lg transition-all ${
+                          materialUnit === 'g'
+                            ? 'bg-emerald-600 text-white shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        g (그램)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMaterialUnit('kg')}
+                        className={`py-1.5 text-xs font-bold rounded-lg transition-all ${
+                          materialUnit === 'kg'
+                            ? 'bg-emerald-600 text-white shadow-sm'
+                            : 'text-slate-600 hover:text-slate-900'
+                        }`}
+                      >
+                        kg (킬로그램)
+                      </button>
+                    </div>
+                  </div>
+
                   {/* 원료수불 자동 계산 요약 카드 */}
                   {selectedProduct && materials.length > 0 && (
                     <div className="p-4 rounded-xl bg-emerald-50/60 border border-emerald-200/80 space-y-2.5">
@@ -385,8 +456,8 @@ export default function ProductionLogPage() {
                           <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
                           원료수불부 소요량 자동 계산 결과
                         </span>
-                        <span className="text-[11px] font-normal text-emerald-700">
-                          (입고량 = 사용량 동일)
+                        <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded">
+                          단위: {materialUnit}
                         </span>
                       </div>
                       <div className="space-y-1.5">
@@ -473,9 +544,12 @@ export default function ProductionLogPage() {
               <div className="bg-slate-800/90 text-white px-4 py-2.5 rounded-t-2xl flex items-center justify-between">
                 <div className="flex items-center gap-2 text-xs font-semibold">
                   <Eye className="w-4 h-4 text-emerald-400" />
-                  <span>실시간 양식 미리보기 (생산일지.pdf 서식과 100% 동일)</span>
+                  <span>실시간 양식 미리보기 (생산일지.pdf 서식 1:1)</span>
                 </div>
                 <div className="flex items-center gap-2">
+                  <span className="text-[11px] bg-slate-700 text-slate-300 px-2 py-0.5 rounded">
+                    단위: {materialUnit}
+                  </span>
                   <span className="text-[11px] bg-slate-700 text-slate-300 px-2 py-0.5 rounded">
                     A4 단일 페이지
                   </span>

@@ -26,15 +26,17 @@ export function sumRatios(ratios: (number | string | undefined | null)[]): numbe
 /**
  * 완제품 생산량과 제품 배합비에 따라 원료수불부(입고량, 사용량) 자동 계산
  * 
- * - 원재료 단위(g 또는 kg)에 맞추어 정확하게 환산 계산
- * - 예: 제품 250g × 1,000개 = 총 250,000g (250kg)
- *   - 원재료 단위가 'kg'인 경우: 250kg × 함량%
- *   - 원재료 단위가 'g'인 경우: 250,000g × 함량%
+ * - displayUnitOverride('g' | 'kg')가 지정되면 해당 단위로 모든 원료를 일괄 환산
+ * - 지정되지 않으면 원재료에 등록된 단위(기본 'g') 사용
+ * - 예: 제품 250g × 1,000개 = 총 250,000g
+ *   - 'kg' 선택 시: 250kg × 함량%
+ *   - 'g' 선택 시: 250,000g × 함량%
  * - 입고량 = 사용량 동일 채움 (당일 입고-당일 소진)
  */
 export function calculateMaterials(
   product: Product,
-  quantity: number
+  quantity: number,
+  displayUnitOverride?: 'g' | 'kg'
 ): ProductionLogMaterial[] {
   if (!product || !product.ingredients || product.ingredients.length === 0 || quantity <= 0) {
     return [];
@@ -52,23 +54,23 @@ export function calculateMaterials(
   }
 
   return product.ingredients.map((ing: ProductIngredient) => {
-    const ingUnit = (ing.unit || 'kg').trim().toLowerCase();
+    const targetUnit = (displayUnitOverride || ing.unit || 'g').trim().toLowerCase();
     const ratio = Number(ing.ratio) || 0;
 
     let requiredQty = 0;
-    if (ingUnit === 'g') {
+    if (targetUnit === 'kg') {
+      // kg 단위로 산출 (g -> kg)
+      requiredQty = (totalProductGrams / 1000) * (ratio / 100);
+    } else {
       // g 단위로 산출
       requiredQty = totalProductGrams * (ratio / 100);
-    } else {
-      // 기본 kg 단위로 산출 (g -> kg)
-      requiredQty = (totalProductGrams / 1000) * (ratio / 100);
     }
 
     const finalQty = roundFixed(requiredQty, 2);
 
     return {
       ingredient_name: ing.ingredient_name,
-      unit: ing.unit || 'kg',
+      unit: targetUnit,
       in_quantity: finalQty,
       out_quantity: finalQty,
       remarks: ing.remarks || '',

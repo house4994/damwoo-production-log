@@ -57,6 +57,15 @@ body {
     page-break-inside: avoid !important;
   }
 
+  .print-page {
+    page-break-after: always !important;
+    break-after: page !important;
+  }
+  .print-page:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
+  }
+
   table {
     page-break-inside: avoid !important;
   }
