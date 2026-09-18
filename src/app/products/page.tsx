@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Product, ProductIngredient } from '@/lib/types';
+import { sumRatios } from '@/lib/calculator';
 import {
   Database,
   Plus,
@@ -148,12 +149,9 @@ export default function ProductsPage() {
     });
   };
 
-  // 원재료 함량 합계 계산
-  const totalRatio = ingredients.reduce(
-    (acc, cur) => acc + (Number(cur.ratio) || 0),
-    0
-  );
-  const isRatio100 = Math.abs(totalRatio - 100) < 0.01;
+  // 원재료 함량 합계 계산 (부동소수점 오차 방지)
+  const totalRatio = sumRatios(ingredients.map((i) => i.ratio));
+  const isRatio100 = Math.abs(totalRatio - 100) < 0.001;
 
   // 저장 (신규 등록 또는 수정)
   const handleSubmit = async (e: React.FormEvent) => {
@@ -380,7 +378,7 @@ export default function ProductsPage() {
                   <div className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2 flex items-center justify-between">
                     <span>원재료 배합비 ({prod.ingredients?.length || 0}종)</span>
                     <span className="text-emerald-600 font-semibold">
-                      합계 {prod.ingredients?.reduce((a, c) => a + c.ratio, 0)}%
+                      합계 {sumRatios(prod.ingredients?.map((c) => c.ratio) || [])}%
                     </span>
                   </div>
                   <div className="space-y-1.5">
@@ -393,6 +391,9 @@ export default function ProductsPage() {
                           <span className="font-medium text-slate-700">{ing.ingredient_name}</span>
                           <div className="flex items-center gap-2">
                             <span className="font-bold text-emerald-700">{ing.ratio}%</span>
+                            <span className="text-[10px] font-bold text-slate-600 bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200">
+                              {ing.unit || 'kg'}
+                            </span>
                             {ing.remarks && (
                               <span className="text-[10px] text-slate-400 bg-white px-1.5 py-0.5 rounded border border-slate-200">
                                 {ing.remarks}
@@ -522,7 +523,7 @@ export default function ProductsPage() {
                     ) : (
                       <AlertTriangle className="w-3.5 h-3.5 text-amber-600" />
                     )}
-                    <span>함량 합계: {totalRatio.toFixed(1)}%</span>
+                    <span>함량 합계: {totalRatio}%</span>
                   </div>
                 </div>
 
@@ -549,7 +550,7 @@ export default function ProductsPage() {
                         <input
                           type="number"
                           placeholder="함량"
-                          step="0.1"
+                          step="0.01"
                           min="0"
                           max="100"
                           value={ing.ratio === 0 ? '' : ing.ratio}
@@ -564,16 +565,17 @@ export default function ProductsPage() {
                         </span>
                       </div>
 
-                      {/* 수불 단위 */}
-                      <input
-                        type="text"
-                        placeholder="단위"
+                      {/* 수불 단위 (g / kg 선택) */}
+                      <select
                         value={ing.unit || 'kg'}
                         onChange={(e) =>
                           handleIngredientChange(idx, 'unit', e.target.value)
                         }
-                        className="w-16 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-center font-medium text-slate-700 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                      />
+                        className="w-18 px-2 py-1.5 bg-white border border-slate-200 rounded-lg text-xs text-center font-bold text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+                      >
+                        <option value="kg">kg</option>
+                        <option value="g">g</option>
+                      </select>
 
                       {/* 비고 */}
                       <input
