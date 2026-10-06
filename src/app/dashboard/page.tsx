@@ -10,10 +10,6 @@ import {
   Layers,
   Boxes,
   Scale,
-  CalendarDays,
-  Award,
-  ChevronDown,
-  ChevronUp,
   RefreshCw,
   ArrowUpDown,
   ArrowUp,
@@ -21,6 +17,9 @@ import {
   Clock,
   Info,
   X,
+  ChevronLeft,
+  ChevronRight,
+  ExternalLink,
 } from 'lucide-react';
 
 interface AggregatedProduct {
@@ -38,23 +37,23 @@ interface AggregatedProduct {
   logs: ProductionLog[];
 }
 
+type PeriodScope = 'monthly' | 'yearly' | 'all';
 type SortField = 'productName' | 'logCount' | 'totalQuantity' | 'totalWeightKg' | 'percentage';
 type SortOrder = 'asc' | 'desc';
 
+const PAGE_SIZE = 15;
+
 export default function DashboardPage() {
-  // 1. 기준 오늘 날짜 및 기본 월 계산
+  // 1. 기준 오늘 날짜
   const now = new Date();
   const currentYear = now.getFullYear();
   const currentMonth = now.getMonth() + 1;
 
-  const defaultFirstDay = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
-  const defaultLastDay = new Date(currentYear, currentMonth, 0).toISOString().split('T')[0];
-
-  // 2. 상태 관리: 기간 필터 (드롭다운 & 달력 & 프리셋 통합)
+  // 2. 상태 관리: 기간 필터 (월별 / 연간 / 전체)
+  const [periodScope, setPeriodScope] = useState<PeriodScope>('monthly');
   const [selectedYear, setSelectedYear] = useState<number>(currentYear);
-  const [selectedMonth, setSelectedMonth] = useState<number | 'all' | 'custom'>(currentMonth);
-  const [startDate, setStartDate] = useState<string>(defaultFirstDay);
-  const [endDate, setEndDate] = useState<string>(defaultLastDay);
+  const [selectedMonth, setSelectedMonth] = useState<number>(currentMonth);
+  const [availableYears, setAvailableYears] = useState<number[]>([currentYear]);
 
   // 제품 및 카테고리 데이터
   const [products, setProducts] = useState<Product[]>([]);
@@ -68,24 +67,57 @@ export default function DashboardPage() {
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // 테이블 정렬 및 아코디언 펼침
+  // 테이블 정렬
   const [sortField, setSortField] = useState<SortField>('totalQuantity');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
-  const [expandedProducts, setExpandedProducts] = useState<Set<string>>(new Set());
 
-  // 3. 연도 목록 (최근 5년 및 로그에 존재하는 연도)
-  const availableYears = useMemo(() => {
-    const years = new Set<number>([currentYear - 1, currentYear, currentYear + 1]);
-    logs.forEach((log) => {
-      if (log.log_date) {
-        const y = parseInt(log.log_date.slice(0, 4), 10);
-        if (!isNaN(y)) years.add(y);
+  // 상세 보기 팝업 모달 상태 & 페이지네이션
+  const [detailModalProduct, setDetailModalProduct] = useState<AggregatedProduct | null>(null);
+  const [modalPage, setModalPage] = useState<number>(1);
+
+  // 3. 기간 계산 (월별 / 연간 / 전체)
+  const { startDate, endDate } = useMemo(() => {
+    if (periodScope === 'all') {
+      return { startDate: '', endDate: '' };
+    }
+    if (periodScope === 'yearly') {
+      return {
+        startDate: `${selectedYear}-01-01`,
+        endDate: `${selectedYear}-12-31`,
+      };
+    }
+    // monthly (월별)
+    const monthPad = String(selectedMonth).padStart(2, '0');
+    const lastDay = new Date(selectedYear, selectedMonth, 0).getDate();
+    return {
+      startDate: `${selectedYear}-${monthPad}-01`,
+      endDate: `${selectedYear}-${monthPad}-${String(lastDay).padStart(2, '0')}`,
+    };
+  }, [periodScope, selectedYear, selectedMonth]);
+
+  // 4. 실제 일지가 존재하는 연도 목록 조회
+  const fetchAvailableYears = useCallback(async () => {
+    try {
+      const { data, error } = await supabase
+        .from('production_logs')
+        .select('log_date');
+
+      if (!error && data) {
+        const yearSet = new Set<number>([currentYear]);
+        data.forEach((row: { log_date?: string }) => {
+          if (row.log_date) {
+            const y = parseInt(row.log_date.slice(0, 4), 10);
+            if (!isNaN(y)) yearSet.add(y);
+          }
+        });
+        setAvailableYears(Array.from(yearSet).sort((a, b) => b - a));
       }
-    });
-    return Array.from(years).sort((a, b) => b - a);
-  }, [logs, currentYear]);
+    } catch (err: unknown) {
+      console.error('Failed to fetch available years:', err);
+    }
+  }, [currentYear]);
 
-  // 4. 제품 및 카테고리 데이터 로드
+  // 5. 제품 및 카테고리 데이터 로드
   const fetchProductsAndCategories = useCallback(async () => {
     try {
       const [prodRes, catRes] = await Promise.all([
@@ -139,7 +171,7 @@ export default function DashboardPage() {
     }
   }, []);
 
-  // 5. 생산일지 데이터 로드
+  // 6. 생산일지 데이터 로드
   const fetchLogs = useCallback(async () => {
     try {
       setIsLoading(true);
@@ -206,77 +238,27 @@ export default function DashboardPage() {
   // 초기 및 변경 시 로드
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
+    void fetchAvailableYears();
     void fetchProductsAndCategories();
-  }, [fetchProductsAndCategories]);
+  }, [fetchAvailableYears, fetchProductsAndCategories]);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchLogs();
   }, [fetchLogs]);
 
-  // 6. 연도 / 월 드롭다운 조작 핸들러
-  const handleYearChange = (year: number) => {
-    setSelectedYear(year);
-    if (selectedMonth === 'all') {
-      setStartDate(`${year}-01-01`);
-      setEndDate(`${year}-12-31`);
-    } else if (typeof selectedMonth === 'number') {
-      const start = `${year}-${String(selectedMonth).padStart(2, '0')}-01`;
-      const lastDay = new Date(year, selectedMonth, 0).toISOString().split('T')[0];
-      setStartDate(start);
-      setEndDate(lastDay);
-    }
-  };
+  // ESC 키로 모달 닫기
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && detailModalProduct) {
+        setDetailModalProduct(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [detailModalProduct]);
 
-  const handleMonthChange = (month: number | 'all') => {
-    setSelectedMonth(month);
-    if (month === 'all') {
-      setStartDate(`${selectedYear}-01-01`);
-      setEndDate(`${selectedYear}-12-31`);
-    } else {
-      const start = `${selectedYear}-${String(month).padStart(2, '0')}-01`;
-      const lastDay = new Date(selectedYear, month, 0).toISOString().split('T')[0];
-      setStartDate(start);
-      setEndDate(lastDay);
-    }
-  };
-
-  // 빠른 프리셋 버튼 핸들러
-  const handlePresetCurrentMonth = () => {
-    setSelectedYear(currentYear);
-    setSelectedMonth(currentMonth);
-    const start = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
-    const lastDay = new Date(currentYear, currentMonth, 0).toISOString().split('T')[0];
-    setStartDate(start);
-    setEndDate(lastDay);
-  };
-
-  const handlePresetPreviousMonth = () => {
-    const prevDate = new Date(currentYear, currentMonth - 2, 1);
-    const pYear = prevDate.getFullYear();
-    const pMonth = prevDate.getMonth() + 1;
-    setSelectedYear(pYear);
-    setSelectedMonth(pMonth);
-    const start = `${pYear}-${String(pMonth).padStart(2, '0')}-01`;
-    const lastDay = new Date(pYear, pMonth, 0).toISOString().split('T')[0];
-    setStartDate(start);
-    setEndDate(lastDay);
-  };
-
-  const handlePresetCurrentYear = () => {
-    setSelectedYear(currentYear);
-    setSelectedMonth('all');
-    setStartDate(`${currentYear}-01-01`);
-    setEndDate(`${currentYear}-12-31`);
-  };
-
-  const handlePresetAllTime = () => {
-    setSelectedMonth('all');
-    setStartDate('');
-    setEndDate('');
-  };
-
-  // 7. 제품 필터 드롭다운 조작
+  // 7. 제품 필터 조작
   const handleAddProductFilter = (prodId: string) => {
     if (!prodId) return;
     const next = new Set(selectedProductIds);
@@ -294,7 +276,6 @@ export default function DashboardPage() {
     setSelectedProductIds(new Set());
   };
 
-  // 드롭다운에 추가 가능한 미선택 제품 목록
   const selectableProducts = useMemo(() => {
     return products.filter((p) => !selectedProductIds.has(p.id));
   }, [products, selectedProductIds]);
@@ -308,10 +289,9 @@ export default function DashboardPage() {
     return (capacity * quantity) / 1000;
   };
 
-  // 9. 제품별 집계 및 종합 KPI 계산
-  const { aggregatedList, grandTotalQty, grandTotalWeightKg, totalProductionDays, totalLogRecords, topProduct } =
+  // 9. 제품별 집계 계산
+  const { aggregatedList, grandTotalQty, grandTotalWeightKg, totalLogRecords } =
     useMemo(() => {
-      // 1) 선택된 제품 필터링 (선택된 ID가 없으면 '전체 제품' 집계)
       const hasSpecificFilter = selectedProductIds.size > 0;
       const filteredLogs = logs.filter((log) => {
         if (!hasSpecificFilter) return true;
@@ -321,16 +301,11 @@ export default function DashboardPage() {
         return false;
       });
 
-      // 2) 제품별 그룹화
       const groupMap = new Map<string, AggregatedProduct>();
-      const allDistinctDates = new Set<string>();
-
       let sumQty = 0;
       let sumWeight = 0;
 
       filteredLogs.forEach((log) => {
-        if (log.log_date) allDistinctDates.add(log.log_date);
-
         const masterProd = products.find(
           (p) => (log.product_id && p.id === log.product_id) || p.name === log.product_name
         );
@@ -369,7 +344,6 @@ export default function DashboardPage() {
         item.logs.push(log);
       });
 
-      // 3) 고유 생산일수 및 비중 계산
       const list = Array.from(groupMap.values()).map((item) => {
         const prodDates = new Set(item.logs.map((l) => l.log_date));
         item.datesCount = prodDates.size;
@@ -379,17 +353,11 @@ export default function DashboardPage() {
         return item;
       });
 
-      // 최다 생산 품목 찾기
-      const sortedByQty = [...list].sort((a, b) => b.totalQuantity - a.totalQuantity);
-      const top = sortedByQty.length > 0 ? sortedByQty[0] : null;
-
       return {
         aggregatedList: list,
         grandTotalQty: sumQty,
         grandTotalWeightKg: roundFixed(sumWeight, 2),
-        totalProductionDays: allDistinctDates.size,
         totalLogRecords: filteredLogs.length,
-        topProduct: top,
       };
     }, [logs, products, selectedProductIds]);
 
@@ -415,19 +383,27 @@ export default function DashboardPage() {
     }
   };
 
-  const toggleExpand = (key: string) => {
-    const next = new Set(expandedProducts);
-    if (next.has(key)) {
-      next.delete(key);
-    } else {
-      next.add(key);
-    }
-    setExpandedProducts(next);
+  // 모달 열기 핸들러
+  const handleOpenDetailModal = (product: AggregatedProduct) => {
+    setDetailModalProduct(product);
+    setModalPage(1);
   };
+
+  // 모달 내 페이지네이션 계산
+  const modalPaginatedLogs = useMemo(() => {
+    if (!detailModalProduct) return [];
+    const startIndex = (modalPage - 1) * PAGE_SIZE;
+    return detailModalProduct.logs.slice(startIndex, startIndex + PAGE_SIZE);
+  }, [detailModalProduct, modalPage]);
+
+  const modalTotalPages = useMemo(() => {
+    if (!detailModalProduct) return 1;
+    return Math.max(1, Math.ceil(detailModalProduct.logs.length / PAGE_SIZE));
+  }, [detailModalProduct]);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
-      {/* 상단 타이틀 카드 (기존 스타일 통일) */}
+      {/* 상단 타이틀 카드 */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
         <div className="flex items-center gap-3">
           <div className="p-2.5 bg-emerald-50 text-emerald-600 rounded-xl">
@@ -444,6 +420,7 @@ export default function DashboardPage() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => {
+              fetchAvailableYears();
               fetchProductsAndCategories();
               fetchLogs();
             }}
@@ -464,114 +441,110 @@ export default function DashboardPage() {
         </div>
       )}
 
-      {/* 단순하고 컴팩트한 단일 라인 필터바 */}
+      {/* 컴팩트 단일 라인 필터바 (월별 / 연간 / 전체 선택 및 드롭다운) */}
       <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-3">
         <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3 text-xs">
-          {/* 기간 필터 컨트롤: 연도 드롭다운 + 월 드롭다운 + 달력 + 프리셋 */}
-          <div className="flex flex-wrap items-center gap-2">
+          {/* 기간 필터 컨트롤: [월별][연간][전체] 버튼 + 연도 드롭다운 + 월 드롭다운 */}
+          <div className="flex flex-wrap items-center gap-2.5">
             <span className="font-semibold text-slate-700 flex items-center gap-1.5 whitespace-nowrap">
               <CalendarRange className="w-4 h-4 text-emerald-600" />
               집계 기간:
             </span>
 
-            {/* 연도 드롭다운 */}
-            <select
-              value={selectedYear}
-              onChange={(e) => handleYearChange(Number(e.target.value))}
-              className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-medium focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
-            >
-              {availableYears.map((y) => (
-                <option key={y} value={y}>
-                  {y}년
-                </option>
-              ))}
-            </select>
-
-            {/* 월 드롭다운 */}
-            <select
-              value={selectedMonth}
-              onChange={(e) =>
-                handleMonthChange(e.target.value === 'all' ? 'all' : Number(e.target.value))
-              }
-              className="px-2.5 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-slate-800 font-medium focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
-            >
-              <option value="all">연간 전체</option>
-              {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => (
-                <option key={m} value={m}>
-                  {m}월
-                </option>
-              ))}
-            </select>
-
-            {/* 직접 달력 선택 */}
-            <div className="flex items-center gap-1 bg-slate-50 border border-slate-200 rounded-lg px-2 py-1">
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => {
-                  setStartDate(e.target.value);
-                  setSelectedMonth('custom');
-                }}
-                className="bg-transparent text-slate-700 text-xs font-medium focus:outline-none"
-              />
-              <span className="text-slate-400">~</span>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => {
-                  setEndDate(e.target.value);
-                  setSelectedMonth('custom');
-                }}
-                className="bg-transparent text-slate-700 text-xs font-medium focus:outline-none"
-              />
-            </div>
-
-            {/* 빠른 프리셋 버튼 */}
-            <div className="flex items-center gap-1">
+            {/* 3가지 동작 모드 버튼: 월별 / 연간 / 전체 */}
+            <div className="inline-flex rounded-lg bg-slate-100 p-0.5 border border-slate-200/80">
               <button
                 type="button"
-                onClick={handlePresetCurrentMonth}
-                className={`px-2.5 py-1.5 rounded-lg font-medium transition-colors ${
-                  selectedYear === currentYear && selectedMonth === currentMonth
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                onClick={() => setPeriodScope('monthly')}
+                className={`px-3 py-1.5 rounded-md font-medium transition-all ${
+                  periodScope === 'monthly'
+                    ? 'bg-white text-emerald-700 shadow-xs font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                이번달
+                월별
               </button>
               <button
                 type="button"
-                onClick={handlePresetPreviousMonth}
-                className="px-2.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg font-medium transition-colors"
-              >
-                지난달
-              </button>
-              <button
-                type="button"
-                onClick={handlePresetCurrentYear}
-                className={`px-2.5 py-1.5 rounded-lg font-medium transition-colors ${
-                  selectedYear === currentYear && selectedMonth === 'all'
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                onClick={() => setPeriodScope('yearly')}
+                className={`px-3 py-1.5 rounded-md font-medium transition-all ${
+                  periodScope === 'yearly'
+                    ? 'bg-white text-emerald-700 shadow-xs font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
-                올해
+                연간
               </button>
               <button
                 type="button"
-                onClick={handlePresetAllTime}
-                className={`px-2.5 py-1.5 rounded-lg font-medium transition-colors ${
-                  !startDate && !endDate
-                    ? 'bg-emerald-600 text-white shadow-sm'
-                    : 'bg-slate-100 hover:bg-slate-200 text-slate-700'
+                onClick={() => setPeriodScope('all')}
+                className={`px-3 py-1.5 rounded-md font-medium transition-all ${
+                  periodScope === 'all'
+                    ? 'bg-white text-emerald-700 shadow-xs font-semibold'
+                    : 'text-slate-600 hover:text-slate-900'
                 }`}
               >
                 전체
               </button>
             </div>
+
+            {/* 연도 드롭다운 (전체 모드 시 비활성화) */}
+            <div className="flex items-center gap-1">
+              <select
+                value={selectedYear}
+                disabled={periodScope === 'all'}
+                onChange={(e) => setSelectedYear(Number(e.target.value))}
+                className={`px-2.5 py-1.5 border rounded-lg font-medium transition-all ${
+                  periodScope === 'all'
+                    ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-60'
+                    : 'bg-slate-50 border-slate-200 text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer'
+                }`}
+                title={periodScope === 'all' ? '전체 기간 선택 중입니다' : '연도 선택'}
+              >
+                {availableYears.map((y) => (
+                  <option key={y} value={y}>
+                    {y}년
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* 월 드롭다운 (연간/전체 모드 시 비활성화) */}
+            <div className="flex items-center gap-1">
+              <select
+                value={selectedMonth}
+                disabled={periodScope === 'yearly' || periodScope === 'all'}
+                onChange={(e) => setSelectedMonth(Number(e.target.value))}
+                className={`px-2.5 py-1.5 border rounded-lg font-medium transition-all ${
+                  periodScope === 'yearly' || periodScope === 'all'
+                    ? 'bg-slate-100 border-slate-200 text-slate-400 cursor-not-allowed opacity-60'
+                    : 'bg-slate-50 border-slate-200 text-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer'
+                }`}
+                title={
+                  periodScope === 'yearly'
+                    ? '연간 전체 집계 중입니다'
+                    : periodScope === 'all'
+                    ? '전체 기간 집계 중입니다'
+                    : '월 선택'
+                }
+              >
+                {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((m) => (
+                  <option key={m} value={m}>
+                    {m}월
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* 현재 적용 기간 텍스트 뱃지 */}
+            <span className="text-[11px] text-slate-500 bg-slate-100 px-2.5 py-1 rounded-md border border-slate-200/60 hidden sm:inline-block">
+              {periodScope === 'monthly' && `${selectedYear}년 ${selectedMonth}월 (당월)`}
+              {periodScope === 'yearly' && `${selectedYear}년 전체 (1~12월)`}
+              {periodScope === 'all' && '등록된 전체 기간'}
+            </span>
           </div>
 
-          {/* 제품 필터 드롭다운 추가 인터페이스 */}
+          {/* 제품 필터 드롭다운 추가 */}
           <div className="flex items-center gap-2 pt-2 lg:pt-0 border-t lg:border-t-0 border-slate-100">
             <span className="font-semibold text-slate-700 flex items-center gap-1 whitespace-nowrap">
               <Layers className="w-4 h-4 text-emerald-600" />
@@ -648,103 +621,48 @@ export default function DashboardPage() {
         )}
       </div>
 
-      {/* 종합 지표 KPI 요약 카드 (Light Mode 통일) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      {/* 종합 지표 KPI 요약 카드 (총 수량 & 총 중량 2개 카드만 심플하게 구성) */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         {/* 카드 1: 총 생산 수량 */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:border-emerald-300 transition-all">
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm hover:border-emerald-300 transition-all">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
               총 완제품 생산량
             </span>
-            <div className="p-2 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100">
+            <div className="p-2.5 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-100">
               <Boxes className="w-5 h-5" />
             </div>
           </div>
-          <div className="mt-3">
-            <div className="text-2xl sm:text-3xl font-black text-slate-900 flex items-baseline gap-1.5">
+          <div className="mt-4">
+            <div className="text-3xl sm:text-4xl font-black text-slate-900 flex items-baseline gap-1.5">
               <span>{formatNum(grandTotalQty)}</span>
-              <span className="text-sm font-semibold text-emerald-600">개 / 봉</span>
+              <span className="text-base font-semibold text-emerald-600">개 / 봉</span>
             </div>
-            <p className="mt-1 text-xs text-slate-400">선택 기간 내 완제품 총 수량</p>
+            <p className="mt-1 text-xs text-slate-400">선택된 기간 내 완제품 총 생산 수량</p>
           </div>
         </div>
 
         {/* 카드 2: 총 생산 중량 (kg) */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:border-sky-300 transition-all">
+        <div className="bg-white border border-slate-200 rounded-2xl p-6 shadow-sm hover:border-sky-300 transition-all">
           <div className="flex items-center justify-between">
             <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
               총 환산 중량
             </span>
-            <div className="p-2 rounded-xl bg-sky-50 text-sky-600 border border-sky-100">
+            <div className="p-2.5 rounded-xl bg-sky-50 text-sky-600 border border-sky-100">
               <Scale className="w-5 h-5" />
             </div>
           </div>
-          <div className="mt-3">
-            <div className="text-2xl sm:text-3xl font-black text-slate-900 flex items-baseline gap-1.5">
+          <div className="mt-4">
+            <div className="text-3xl sm:text-4xl font-black text-slate-900 flex items-baseline gap-1.5">
               <span>{formatNum(grandTotalWeightKg)}</span>
-              <span className="text-sm font-semibold text-sky-600">kg</span>
+              <span className="text-base font-semibold text-sky-600">kg</span>
             </div>
-            <p className="mt-1 text-xs text-slate-400">포장 규격 기준 총 생산 무게</p>
-          </div>
-        </div>
-
-        {/* 카드 3: 생산 가동 일수 및 건수 */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:border-violet-300 transition-all">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-              가동 일수 / 기록 건수
-            </span>
-            <div className="p-2 rounded-xl bg-violet-50 text-violet-600 border border-violet-100">
-              <CalendarDays className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="mt-3">
-            <div className="text-2xl sm:text-3xl font-black text-slate-900 flex items-baseline gap-1.5">
-              <span>{totalProductionDays}</span>
-              <span className="text-sm font-semibold text-violet-600">일</span>
-              <span className="text-xs font-normal text-slate-400 ml-1">
-                (총 {totalLogRecords}건)
-              </span>
-            </div>
-            <p className="mt-1 text-xs text-slate-400">실제 생산이 기록된 누적 일수</p>
-          </div>
-        </div>
-
-        {/* 카드 4: 최다 생산 품목 */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-sm hover:border-amber-300 transition-all">
-          <div className="flex items-center justify-between">
-            <span className="text-xs font-semibold uppercase tracking-wider text-slate-500">
-              최다 생산 품목
-            </span>
-            <div className="p-2 rounded-xl bg-amber-50 text-amber-600 border border-amber-100">
-              <Award className="w-5 h-5" />
-            </div>
-          </div>
-          <div className="mt-3">
-            {topProduct ? (
-              <>
-                <div
-                  className="text-base sm:text-lg font-bold text-slate-900 truncate"
-                  title={topProduct.productName}
-                >
-                  {topProduct.productName}
-                </div>
-                <div className="mt-1 flex items-baseline gap-1.5 text-xs">
-                  <span className="font-semibold text-amber-600">
-                    {formatNum(topProduct.totalQuantity)}개
-                  </span>
-                  <span className="text-slate-400">({topProduct.percentage}%)</span>
-                </div>
-              </>
-            ) : (
-              <div className="text-sm text-slate-400 mt-2">생산 내역 없음</div>
-            )}
-            <p className="mt-1 text-xs text-slate-400">선택 기간 최다 생산 1위 제품</p>
+            <p className="mt-1 text-xs text-slate-400">포장 규격을 반영한 총 생산 무게</p>
           </div>
         </div>
       </div>
 
-      {/* 제품별 생산 집계 요약 및 상세 내역 테이블 (Light Mode 통일) */}
+      {/* 제품별 생산 집계 요약 테이블 */}
       <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-sm">
         <div className="p-5 border-b border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
@@ -755,12 +673,12 @@ export default function DashboardPage() {
               </span>
             </h2>
             <p className="text-xs text-slate-500 mt-0.5">
-              각 제품 행을 클릭하면 해당 기간의 일자별 생산 상세 내역을 확인할 수 있습니다.
+              행 또는 [상세보기] 버튼을 누르면 해당 제품의 일자별 생산 내역 팝업을 확인할 수 있습니다.
             </p>
           </div>
         </div>
 
-        {/* 테이블 영역 */}
+        {/* 테이블 본문 */}
         {isLoading ? (
           <div className="py-24 text-center">
             <RefreshCw className="w-8 h-8 mx-auto text-emerald-600 animate-spin mb-3" />
@@ -869,154 +787,81 @@ export default function DashboardPage() {
                       )}
                     </div>
                   </th>
-                  <th className="py-3 px-4 text-center w-16">상세</th>
+                  <th className="py-3 px-4 text-center w-24">상세</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100 text-xs sm:text-sm text-slate-700">
                 {sortedAggregatedList.map((item, index) => {
-                  const isExpanded = expandedProducts.has(item.key);
                   return (
-                    <React.Fragment key={item.key}>
-                      <tr
-                        onClick={() => toggleExpand(item.key)}
-                        className={`cursor-pointer transition-colors ${
-                          isExpanded ? 'bg-slate-50 font-medium' : 'hover:bg-slate-50/80'
-                        }`}
-                      >
-                        <td className="py-3.5 px-4 sm:px-6 text-center text-slate-400 font-mono text-xs">
-                          {index + 1}
-                        </td>
-                        <td className="py-3.5 px-4 font-semibold text-slate-900">
-                          <div className="flex items-center gap-2">
-                            <span>{item.productName}</span>
-                            {index === 0 && sortField === 'totalQuantity' && (
-                              <span className="text-[10px] bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded-full font-normal">
-                                1위
-                              </span>
-                            )}
+                    <tr
+                      key={item.key}
+                      onClick={() => handleOpenDetailModal(item)}
+                      className="cursor-pointer transition-colors hover:bg-slate-50/80 group"
+                    >
+                      <td className="py-3.5 px-4 sm:px-6 text-center text-slate-400 font-mono text-xs">
+                        {index + 1}
+                      </td>
+                      <td className="py-3.5 px-4 font-semibold text-slate-900 group-hover:text-emerald-700 transition-colors">
+                        {item.productName}
+                      </td>
+                      <td className="py-3.5 px-4 text-slate-500 hidden md:table-cell">
+                        <span className="px-2 py-0.5 rounded-md bg-slate-100 text-xs text-slate-600">
+                          {item.categoryName}
+                        </span>
+                      </td>
+                      <td className="py-3.5 px-4 text-slate-500 hidden sm:table-cell font-mono text-xs">
+                        {item.capacity} {item.unit}
+                      </td>
+                      <td className="py-3.5 px-4 text-right text-slate-600 font-mono">
+                        {item.logCount}회 ({item.datesCount}일)
+                      </td>
+                      <td className="py-3.5 px-4 text-right font-bold text-emerald-600 font-mono text-sm sm:text-base">
+                        {formatNum(item.totalQuantity)}
+                        <span className="text-xs font-normal text-emerald-700 ml-1">개</span>
+                      </td>
+                      <td className="py-3.5 px-4 text-right font-semibold text-sky-600 font-mono">
+                        {formatNum(item.totalWeightKg)}
+                        <span className="text-xs font-normal text-sky-700 ml-1">kg</span>
+                      </td>
+                      <td className="py-3.5 px-4 text-right">
+                        <div className="flex items-center justify-end gap-2">
+                          <div className="w-16 bg-slate-100 rounded-full h-2 overflow-hidden hidden sm:block">
+                            <div
+                              className="bg-emerald-500 h-2 rounded-full transition-all duration-300"
+                              style={{ width: `${Math.min(item.percentage, 100)}%` }}
+                            />
                           </div>
-                        </td>
-                        <td className="py-3.5 px-4 text-slate-500 hidden md:table-cell">
-                          <span className="px-2 py-0.5 rounded-md bg-slate-100 text-xs text-slate-600">
-                            {item.categoryName}
+                          <span className="font-mono text-xs text-slate-600 w-10 text-right">
+                            {item.percentage}%
                           </span>
-                        </td>
-                        <td className="py-3.5 px-4 text-slate-500 hidden sm:table-cell font-mono text-xs">
-                          {item.capacity} {item.unit}
-                        </td>
-                        <td className="py-3.5 px-4 text-right text-slate-600 font-mono">
-                          {item.logCount}회 ({item.datesCount}일)
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-bold text-emerald-600 font-mono text-sm sm:text-base">
-                          {formatNum(item.totalQuantity)}
-                          <span className="text-xs font-normal text-emerald-700 ml-1">개</span>
-                        </td>
-                        <td className="py-3.5 px-4 text-right font-semibold text-sky-600 font-mono">
-                          {formatNum(item.totalWeightKg)}
-                          <span className="text-xs font-normal text-sky-700 ml-1">kg</span>
-                        </td>
-                        <td className="py-3.5 px-4 text-right">
-                          <div className="flex items-center justify-end gap-2">
-                            <div className="w-16 bg-slate-100 rounded-full h-2 overflow-hidden hidden sm:block">
-                              <div
-                                className="bg-emerald-500 h-2 rounded-full transition-all duration-300"
-                                style={{ width: `${Math.min(item.percentage, 100)}%` }}
-                              />
-                            </div>
-                            <span className="font-mono text-xs text-slate-600 w-10 text-right">
-                              {item.percentage}%
-                            </span>
-                          </div>
-                        </td>
-                        <td className="py-3.5 px-4 text-center">
-                          <button
-                            type="button"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              toggleExpand(item.key);
-                            }}
-                            className="p-1 rounded-md text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 transition-colors cursor-pointer"
-                          >
-                            {isExpanded ? (
-                              <ChevronUp className="w-4 h-4 text-emerald-600" />
-                            ) : (
-                              <ChevronDown className="w-4 h-4" />
-                            )}
-                          </button>
-                        </td>
-                      </tr>
-
-                      {/* 아코디언 펼침: 일자별 생산 상세 내역 서브 테이블 (Light Mode) */}
-                      {isExpanded && (
-                        <tr className="bg-slate-50/70 border-b border-slate-200">
-                          <td colSpan={9} className="p-4 sm:p-5">
-                            <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-2.5 shadow-sm">
-                              <div className="flex items-center justify-between text-xs pb-2 border-b border-slate-100">
-                                <div className="flex items-center gap-2 text-slate-800 font-medium">
-                                  <Clock className="w-3.5 h-3.5 text-emerald-600" />
-                                  <span>
-                                    <strong>{item.productName}</strong> 일자별 생산 내역 ({item.logs.length}건)
-                                  </span>
-                                </div>
-                                <span className="text-slate-500 text-[11px]">
-                                  누적: {formatNum(item.totalQuantity)}개 ({formatNum(item.totalWeightKg)}kg)
-                                </span>
-                              </div>
-
-                              <div className="overflow-x-auto">
-                                <table className="w-full text-xs">
-                                  <thead>
-                                    <tr className="text-slate-500 border-b border-slate-100 bg-slate-50/50">
-                                      <th className="py-2 px-3 text-left">생산일자</th>
-                                      <th className="py-2 px-3 text-right">생산수량</th>
-                                      <th className="py-2 px-3 text-right">환산중량</th>
-                                      <th className="py-2 px-3 text-left">특이사항 / 비고</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody className="divide-y divide-slate-100 font-mono">
-                                    {item.logs.map((log) => {
-                                      const logWeight = calculateWeightInKg(
-                                        log.product_capacity || item.capacity,
-                                        log.product_unit || item.unit,
-                                        log.quantity
-                                      );
-                                      return (
-                                        <tr key={log.id} className="hover:bg-slate-50">
-                                          <td className="py-2 px-3 text-slate-700 font-medium">
-                                            {log.log_date}
-                                          </td>
-                                          <td className="py-2 px-3 text-right text-emerald-600 font-bold">
-                                            {formatNum(log.quantity)} 개
-                                          </td>
-                                          <td className="py-2 px-3 text-right text-sky-600">
-                                            {formatNum(roundFixed(logWeight, 2))} kg
-                                          </td>
-                                          <td className="py-2 px-3 text-slate-500 font-sans truncate max-w-xs">
-                                            {log.notes || '-'}
-                                          </td>
-                                        </tr>
-                                      );
-                                    })}
-                                  </tbody>
-                                </table>
-                              </div>
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </React.Fragment>
+                        </div>
+                      </td>
+                      <td className="py-3.5 px-4 text-center">
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleOpenDetailModal(item);
+                          }}
+                          className="px-2.5 py-1 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200/80 rounded-lg transition-colors cursor-pointer inline-flex items-center gap-1"
+                        >
+                          <span>보기</span>
+                          <ExternalLink className="w-3 h-3 opacity-70" />
+                        </button>
+                      </td>
+                    </tr>
                   );
                 })}
               </tbody>
 
-              {/* 테이블 하단 합계 요약 푸터 (Light Mode) */}
+              {/* 테이블 하단 합계 요약 푸터 */}
               <tfoot>
                 <tr className="border-t-2 border-slate-200 bg-slate-50 font-semibold text-xs sm:text-sm text-slate-800">
                   <td colSpan={4} className="py-3.5 px-4 sm:px-6 text-slate-700">
                     선택 필터 총합계 ({sortedAggregatedList.length}개 품목)
                   </td>
                   <td className="py-3.5 px-4 text-right font-mono text-slate-700">
-                    {totalLogRecords}회 ({totalProductionDays}일)
+                    {totalLogRecords}건
                   </td>
                   <td className="py-3.5 px-4 text-right font-mono text-emerald-700 text-sm sm:text-base font-bold">
                     {formatNum(grandTotalQty)} 개
@@ -1032,6 +877,154 @@ export default function DashboardPage() {
           </div>
         )}
       </div>
+
+      {/* 팝업 모달: 상품별 일자별 생산 내역 (최대 15개씩 페이지네이션 지원) */}
+      {detailModalProduct && (
+        <div
+          className="fixed inset-0 z-50 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 sm:p-6"
+          onClick={() => setDetailModalProduct(null)}
+        >
+          <div
+            className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* 모달 헤더 */}
+            <div className="p-5 sm:p-6 border-b border-slate-200 flex items-center justify-between bg-slate-50/50">
+              <div className="space-y-1">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h3 className="text-lg font-bold text-slate-900">
+                    {detailModalProduct.productName}
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 border border-emerald-200 text-xs font-medium">
+                    {detailModalProduct.categoryName}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 text-xs font-mono">
+                    {detailModalProduct.capacity} {detailModalProduct.unit}
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500">
+                  해당 기간 내 총 <strong>{detailModalProduct.logs.length}건</strong>의 생산 기록이 집계되었습니다.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setDetailModalProduct(null)}
+                className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-xl transition-colors cursor-pointer"
+                title="닫기 (ESC)"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* 모달 요약 바 */}
+            <div className="bg-slate-50 px-5 sm:px-6 py-3 border-b border-slate-200 flex items-center justify-between text-xs text-slate-600 flex-wrap gap-2">
+              <div className="flex items-center gap-4">
+                <span>
+                  누적 수량:{' '}
+                  <strong className="text-emerald-700 font-mono text-sm">
+                    {formatNum(detailModalProduct.totalQuantity)}개
+                  </strong>
+                </span>
+                <span>
+                  누적 중량:{' '}
+                  <strong className="text-sky-700 font-mono text-sm">
+                    {formatNum(detailModalProduct.totalWeightKg)}kg
+                  </strong>
+                </span>
+                <span>
+                  실제 생산 일수:{' '}
+                  <strong className="text-slate-800 font-mono">
+                    {detailModalProduct.datesCount}일
+                  </strong>
+                </span>
+              </div>
+              <div className="text-[11px] text-slate-500 flex items-center gap-1">
+                <Clock className="w-3.5 h-3.5 text-slate-400" />
+                <span>최신 생산일자 순 정렬</span>
+              </div>
+            </div>
+
+            {/* 모달 테이블 본문 (스크롤) */}
+            <div className="flex-1 overflow-y-auto p-5 sm:p-6">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-slate-600 border-b border-slate-200 bg-slate-50/80 font-semibold">
+                    <th className="py-2.5 px-3 text-left w-28">생산일자</th>
+                    <th className="py-2.5 px-3 text-right w-28">생산수량</th>
+                    <th className="py-2.5 px-3 text-right w-28">환산중량</th>
+                    <th className="py-2.5 px-3 text-left">특이사항 / 비고</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100 font-mono text-xs">
+                  {modalPaginatedLogs.map((log) => {
+                    const logWeight = calculateWeightInKg(
+                      log.product_capacity || detailModalProduct.capacity,
+                      log.product_unit || detailModalProduct.unit,
+                      log.quantity
+                    );
+                    return (
+                      <tr key={log.id} className="hover:bg-slate-50/80">
+                        <td className="py-2.5 px-3 text-slate-800 font-medium">
+                          {log.log_date}
+                        </td>
+                        <td className="py-2.5 px-3 text-right text-emerald-600 font-bold">
+                          {formatNum(log.quantity)} 개
+                        </td>
+                        <td className="py-2.5 px-3 text-right text-sky-600 font-medium">
+                          {formatNum(roundFixed(logWeight, 2))} kg
+                        </td>
+                        <td className="py-2.5 px-3 text-slate-600 font-sans truncate max-w-sm">
+                          {log.notes || '-'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* 모달 푸터: 15개 단위 페이지네이션 */}
+            <div className="p-4 sm:p-5 border-t border-slate-200 bg-slate-50/60 flex items-center justify-between text-xs text-slate-600">
+              <div>
+                전체 <strong>{detailModalProduct.logs.length}</strong>건 중{' '}
+                <span className="font-mono">
+                  {(modalPage - 1) * PAGE_SIZE + 1} ~{' '}
+                  {Math.min(modalPage * PAGE_SIZE, detailModalProduct.logs.length)}
+                </span>
+                건 표시
+              </div>
+
+              {/* 페이지네이션 버튼 */}
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setModalPage((prev) => Math.max(1, prev - 1))}
+                  disabled={modalPage <= 1}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                >
+                  <ChevronLeft className="w-3.5 h-3.5" />
+                  <span>이전</span>
+                </button>
+
+                <span className="font-medium text-slate-700 px-2">
+                  <span className="text-emerald-700 font-bold">{modalPage}</span> / {modalTotalPages}
+                </span>
+
+                <button
+                  type="button"
+                  onClick={() => setModalPage((prev) => Math.min(modalTotalPages, prev + 1))}
+                  disabled={modalPage >= modalTotalPages}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-white border border-slate-200 rounded-lg text-slate-700 hover:bg-slate-100 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
+                >
+                  <span>다음</span>
+                  <ChevronRight className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
