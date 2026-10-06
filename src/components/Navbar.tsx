@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { FileText, Database, ListOrdered, CheckCircle2 } from 'lucide-react';
+import { FileText, Database, ListOrdered, CheckCircle2, BarChart3 } from 'lucide-react';
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -11,6 +11,7 @@ export default function Navbar() {
   const navItems = [
     { href: '/', label: '생산일지 작성', icon: FileText },
     { href: '/logs', label: '생산일지 목록', icon: ListOrdered },
+    { href: '/dashboard', label: '생산 통계', icon: BarChart3 },
     { href: '/products', label: '제품 및 원재료 관리', icon: Database },
   ];
 
