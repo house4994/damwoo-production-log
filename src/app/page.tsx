@@ -4,11 +4,9 @@ import React, { useState, useEffect, useTransition, useMemo } from 'react';
 import { supabase } from '@/lib/supabase';
 import { Product, ProductionLogMaterial } from '@/lib/types';
 import { calculateMaterials, formatNum } from '@/lib/calculator';
-import { downloadHWPX } from '@/lib/hwpxExporter';
 import ProductionSheetDocument from '@/components/ProductionSheetDocument';
 import {
   Printer,
-  FileDown,
   Save,
   RotateCcw,
   CheckCircle2,
@@ -208,23 +206,7 @@ export default function ProductionLogPage() {
     window.print();
   };
 
-  // 7. HWPX 다운로드 호출
-  const handleDownloadHWPX = async () => {
-    if (!selectedProduct) {
-      alert('제품을 먼저 선택해주세요.');
-      return;
-    }
-    await downloadHWPX({
-      logDate,
-      productName: selectedProduct.name,
-      productUnit: selectedProduct.unit || '개',
-      quantity,
-      materials,
-      notes,
-    });
-  };
-
-  // 8. 초기화
+  // 7. 초기화
   const handleReset = () => {
     if (confirm('입력한 내용을 초기화하시겠습니까?')) {
       setQuantity('');
@@ -513,23 +495,15 @@ export default function ProductionLogPage() {
                       )}
                     </button>
 
-                    {/* 출력 및 다운로드 버튼 */}
-                    <div className="grid grid-cols-2 gap-2">
+                    {/* 출력 버튼 */}
+                    <div>
                       <button
                         type="button"
                         onClick={handlePrint}
-                        className="flex items-center justify-center gap-1.5 py-2.5 px-3 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl shadow-sm transition-all active:scale-[0.98] cursor-pointer"
+                        className="w-full flex items-center justify-center gap-1.5 py-2.5 px-3 bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold rounded-xl shadow-sm transition-all active:scale-[0.98] cursor-pointer"
                       >
                         <Printer className="w-3.5 h-3.5" />
                         <span>PDF / 인쇄 출력</span>
-                      </button>
-                      <button
-                        type="button"
-                        onClick={handleDownloadHWPX}
-                        className="flex items-center justify-center gap-1.5 py-2.5 px-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-sm transition-all active:scale-[0.98] cursor-pointer"
-                      >
-                        <FileDown className="w-3.5 h-3.5" />
-                        <span>한글(.hwpx) 다운로드</span>
                       </button>
                     </div>
                   </div>
