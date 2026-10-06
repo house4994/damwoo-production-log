@@ -3,7 +3,7 @@
 import React from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { FileText, Database, ListOrdered, CheckCircle2, BarChart3 } from 'lucide-react';
+import { FileText, Database, ListOrdered, BarChart3 } from 'lucide-react';
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -58,12 +58,6 @@ export default function Navbar() {
               );
             })}
           </nav>
-
-          {/* 상태 뱃지 */}
-          <div className="hidden md:flex items-center gap-2 text-xs text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-3 py-1.5 rounded-full">
-            <CheckCircle2 className="w-3.5 h-3.5" />
-            <span>Supabase Cloud 연결됨</span>
-          </div>
         </div>
       </div>
     </header>
